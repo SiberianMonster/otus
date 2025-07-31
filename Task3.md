@@ -1,0 +1,314 @@
+Уменьшить том под / до 8G
+
+Первоначальное состояние
+
+```
+root@5385627-rs39011:~# lsblk
+NAME                    MAJ:MIN RM SIZE RO TYPE MOUNTPOINTS
+sda                       8:0    0  40G  0 disk 
+├─sda1                    8:1    0  10G  0 part 
+├─sda2                    8:2    0  10G  0 part /boot
+└─sda3                    8:3    0  20G  0 part 
+  └─ubuntu--vg-ubuntu--lv 252:0  0  10G  0 lvm  /
+sdb                       8:16   0  10G  0 disk 
+sdc                       8:32   0  10G  0 disk 
+sdd                       8:48   0  10G  0 disk 
+sde                       8:64   0  10G  0 disk 
+sdf                       8:80   0  10G  0 disk 
+sdg                       8:96   0  10G  0 disk 
+vda                     253:0    0   1M  1 disk 
+
+```
+
+Подготовила временный том для / раздела:
+
+```
+root@5385627-rs39011:~# pvcreate /dev/sdb
+  Physical volume "/dev/sdb" successfully created.
+
+root@5385627-rs39011:~# vgcreate vg_root /dev/sdb
+  Volume group "vg_root" successfully created
+
+[root@lvm ~]# lvcreate -n lv_root -l +100%FREE /dev/vg_root
+  Logical volume "lv_root" created.
+
+```
+
+Создала файловую систему и смонтировала
+
+```
+root@5385627-rs39011:~# mkfs.ext4 /dev/vg_root/lv_root
+mke2fs 1.47.0 (5-Feb-2023)
+Discarding device blocks: done                            
+Creating filesystem with 2620416 4k blocks and 655360 inodes
+Filesystem UUID: 1b9782d0-4272-4e65-89d5-d5a5bd48b31d
+Superblock backups stored on blocks: 
+	32768, 98304, 163840, 229376, 294912, 819200, 884736, 1605632
+
+Allocating group tables: done                            
+Writing inode tables: done                            
+Creating journal (16384 blocks): done
+Writing superblocks and filesystem accounting information: done 
+```
+
+```
+root@5385627-rs39011:~# mount /dev/vg_root/lv_root /mnt
+root@5385627-rs39011:~# rsync -avxHAX --progress / /mnt/
+
+sent 79,199,271 bytes  received 11,541 bytes  5,462,814.62 bytes/sec
+total size is 1,767,356,149  speedup is 22.31
+
+```
+Проверила, что содержимое скопировалось:
+
+```
+root@5385627-rs39011:~# ls /mnt
+bin                etc                lost+found  root                srv  
+bin.usr-is-merged  home               media       run                 sys
+boot               lib                mnt         sbin                tmp
+cdrom              lib.usr-is-merged  opt         sbin.usr-is-merged  usr         
+dev                lib64              proc        snap                var
+```
+
+Сконфигурировала grub
+
+```
+root@5385627-rs39011:~# for i in /proc/ /sys/ /dev/ /run/ /boot/; \
+ do mount --bind $i /mnt/$i; done
+root@5385627-rs39011:~# chroot /mnt/
+root@5385627-rs39011:/# grub-mkconfig -o /boot/grub/grub.cfg
+Sourcing file `/etc/default/grub'
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.8.0-62-generic
+Found initrd image: /boot/initrd.img-6.8.0-62-generic
+Warning: os-prober will not be executed to detect other bootable partitions.
+Systems on them will not be added to the GRUB boot configuration.
+Check GRUB_DISABLE_OS_PROBER documentation entry.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+root@5385627-rs39011:/# update-initramfs -u
+update-initramfs: Generating /boot/initrd.img-6.8.0-62-generic
+```
+
+Перезагрузила сервер
+
+```
+root@5385627-rs39011:~# lsblk
+NAME                    MAJ:MIN RM SIZE RO TYPE MOUNTPOINTS
+sda                       8:0    0  40G  0 disk 
+├─sda1                    8:1    0  10G  0 part 
+├─sda2                    8:2    0  10G  0 part /boot
+└─sda3                    8:3    0  20G  0 part 
+  └─ubuntu--vg-ubuntu--lv 252:1    0  10G  0 lvm 
+sdb                       8:16   0  10G  0 disk 
+└─vg_root-lv_root         252:0    0  10G  0 lvm /
+sdc                       8:32   0  10G  0 disk 
+sdd                       8:48   0  10G  0 disk 
+sde                       8:64   0  10G  0 disk 
+sdf                       8:80   0  10G  0 disk 
+sdg                       8:96   0  10G  0 disk 
+vda                       253:0    0   1M  1 disk 
+```
+
+Удалила старый LV
+
+```
+root@5385627-rs39011:~# lvremove /dev/ubuntu-vg/ubuntu-lv
+Do you really want to remove and DISCARD active logical volume ubuntu-vg/ubuntu-lv? [y/n]: y
+  Logical volume "ubuntu-lv" successfully removed.
+```
+
+Создала новый на 8G
+
+```
+root@5385627-rs39011:~# lvcreate -n ubuntu-lv -L 8G /dev/ubuntu-vg
+  Logical volume "ubuntu-lv" created.
+root@5385627-rs39011:~# mkfs.ext4 /dev/ubuntu-vg/ubuntu-lv
+mke2fs 1.47.0 (5-Feb-2023)
+Discarding device blocks: done                            
+Creating filesystem with 2620416 4k blocks and 655360 inodes
+Filesystem UUID: ee226e68-808f-411f-90dd-b9d5a2583cd5
+Superblock backups stored on blocks: 
+	32768, 98304, 163840, 229376, 294912, 819200, 884736, 1605632
+
+Allocating group tables: done                            
+Writing inode tables: done                            
+Creating journal (16384 blocks): done
+Writing superblocks and filesystem accounting information: done 
+
+```
+
+Смонтировала
+
+```
+root@5385627-rs39011:~# mount /dev/ubuntu-vg/ubuntu-lv /mnt
+root@5385627-rs39011:~# rsync -avxHAX --progress / /mnt/
+
+sent 89,116,250 bytes  received 11,508 bytes  6,602,056.15 bytes/sec
+total size is 1,802,217,375  speedup is 20.22
+```
+
+Сконфигурировала grub
+
+```
+root@5385627-rs39011:~# for i in /proc/ /sys/ /dev/ /run/ /boot/; \
+ do mount --bind $i /mnt/$i; done
+root@5385627-rs39011:~# chroot /mnt/
+root@5385627-rs39011:/# grub-mkconfig -o /boot/grub/grub.cfg
+Sourcing file `/etc/default/grub'
+Generating grub configuration file ...
+Found linux image: /boot/vmlinuz-6.8.0-62-generic
+Found initrd image: /boot/initrd.img-6.8.0-62-generic
+Warning: os-prober will not be executed to detect other bootable partitions.
+Systems on them will not be added to the GRUB boot configuration.
+Check GRUB_DISABLE_OS_PROBER documentation entry.
+Adding boot menu entry for UEFI Firmware Settings ...
+done
+root@5385627-rs39011:/# update-initramfs -u
+update-initramfs: Generating /boot/initrd.img-6.8.0-62-generic
+```
+
+Выделить том под /var в зеркало
+
+На свободных дисках создала зеркало
+
+```
+root@5385627-rs39011:~# pvcreate /dev/sdc /dev/sdd
+  Physical volume "/dev/sdc" successfully created.
+  Physical volume "/dev/sdd" successfully created.
+
+root@5385627-rs39011:~# vgcreate vg_var /dev/sdc /dev/sdd
+  Volume group "vg_var" successfully created
+root@5385627-rs39011:~# lvcreate -L 950M -m1 -n lv_var vg_var
+  Rounding up size to full physical extent 952.00 MiB
+  Logical volume "lv_var" created.
+```
+
+Создала на нем ФС и переместила туда /var:
+
+```
+root@5385627-rs39011:~# mkfs.ext4 /dev/vg_var/lv_var
+mke2fs 1.47.0 (5-Feb-2023)
+Discarding device blocks: done                            
+Creating filesystem with 243712 4k blocks and 60928 inodes
+Filesystem UUID: 752483ad-a033-489a-951c-337096ca47b6
+Superblock backups stored on blocks: 
+	32768, 98304, 163840, 229376
+
+Allocating group tables: done                            
+Writing inode tables: done                            
+Creating journal (4096 blocks): done
+Writing superblocks and filesystem accounting information: done
+
+root@5385627-rs39011:~# mount /dev/vg_var/lv_var /mnt
+root@5385627-rs39011:~# cp -aR /var/* /mnt/
+root@5385627-rs39011:~# mkdir /tmp/oldvar && mv /var/* /tmp/oldvar
+root@5385627-rs39011:~# umount /mnt
+root@5385627-rs39011:~# mount /dev/vg_var/lv_var /var
+root@5385627-rs39011:~# echo "`blkid | grep var: | awk '{print $2}'` \
+ /var ext4 defaults 0 0" >> /etc/fstab
+```
+
+Удалила временную Volume Group:
+
+```
+root@5385627-rs39011:~# lvremove /dev/vg_root/lv_root
+Do you really want to remove and DISCARD active logical volume vg_root/lv_root? [y/n]: y
+  Logical volume "lv_root" successfully removed.
+root@5385627-rs39011:~# vgremove /dev/vg_root
+  Volume group "vg_root" successfully removed
+root@5385627-rs39011:~# pvremove /dev/sdb
+  Labels on physical volume "/dev/sdb" successfully wiped.
+```
+
+Выделить том под /home
+
+Выделила том под /home
+
+```
+root@5385627-rs39011:~# lvcreate -n LogVol_Home -L 2G /dev/ubuntu-vg
+  Logical volume "LogVol_Home" created.
+root@5385627-rs39011:~# mkfs.ext4 /dev/ubuntu-vg/LogVol_Home
+mke2fs 1.47.0 (5-Feb-2023)
+Discarding device blocks: done                            
+Creating filesystem with 524288 4k blocks and 131072 inodes
+Filesystem UUID: 43435fdf-c512-4064-b1e7-672f209e6174
+Superblock backups stored on blocks: 
+	32768, 98304, 163840, 229376, 294912
+
+Allocating group tables: done                            
+Writing inode tables: done                            
+Creating journal (16384 blocks): done
+Writing superblocks and filesystem accounting information: done 
+
+root@5385627-rs39011:~# mount /dev/ubuntu-vg/LogVol_Home /mnt/
+mount: (hint) your fstab has been modified, but systemd still uses
+       the old version; use 'systemctl daemon-reload' to reload.
+root@5385627-rs39011:~# cp -aR /home/* /mnt/
+cp: cannot stat '/home/*': No such file or directory
+root@5385627-rs39011:~# cd ..
+root@5385627-rs39011:/# cp -aR /home/* /mnt/
+root@5385627-rs39011:/# rm -rf /home
+root@5385627-rs39011:/# umount /mnt
+root@5385627-rs39011:/# mount /dev/ubuntu-vg/LogVol_Home /home/
+mount: (hint) your fstab has been modified, but systemd still uses
+       the old version; use 'systemctl daemon-reload' to reload.
+root@5385627-rs39011:/# echo "`blkid | grep Home | awk '{print $2}'` \
+ /home xfs defaults 0 0" >> /etc/fstab
+
+```
+
+Работа со снапшотами
+
+Сгенерировала файлы в /home/:
+
+```
+root@5385627-rs39011:/# touch /home/file{1..20}
+root@5385627-rs39011:/# lvcreate -L 100MB -s -n home_snap \
+ /dev/ubuntu-vg/LogVol_Home
+  Logical volume "home_snap" created.
+root@5385627-rs39011:/# rm -f /home/file{11..20}
+root@5385627-rs39011:/# umount /home
+root@5385627-rs39011:/# lvconvert --merge /dev/ubuntu-vg/home_snap
+  Merging of volume ubuntu-vg/home_snap started.
+  ubuntu-vg/LogVol_Home: Merged: 100.00%
+
+root@5385627-rs39011:/# mount /dev/mapper/ubuntu--vg-home /home
+mount: (hint) your fstab has been modified, but systemd still uses
+       the old version; use 'systemctl daemon-reload' to reload.
+root@5385627-rs39011:/# ls -al /home
+total 28
+drwxr-xr-x  4 root root  4096 Jul 30 20:25 .
+drwxr-xr-x 26 root root  4096 Jul 30 20:35 ..
+drwxr-xr-x  3 root root  4096 Jul 30 19:57 boot
+drwx------  2 root root 16384 Jul 30 19:14 lost+found
+```
+
+Итоговое состояние:
+
+```
+root@5385627-rs39011:/# lsblk
+NAME                     MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+sda                       8:0    0  40G  0 disk 
+├─sda1                    8:1    0  10G  0 part 
+├─sda2                    8:2    0  10G  0 part /boot
+└─sda3                    8:3    0  20G  0 part 
+  └─ubuntu--vg-ubuntu--lv 252:0  0  10G  0 lvm  /
+  └─ubuntu--vg-LogVol_Home  252:6    0  2G  0 lvm  /home
+sdb                       8:16   0  10G  0 disk 
+sdc                       8:32   0   10G  0 disk 
+├─vg_var-lv_var_rmeta_1  252:3    0    4M  0 lvm  
+│ └─vg_var-lv_var        252:5    0  952M  0 lvm  /var
+└─vg_var-lv_var_rimage_1 252:4    0  952M  0 lvm  
+  └─vg_var-lv_var        252:5    0  952M  0 lvm  /var
+sdd                        8:48   0   10G  0 disk 
+├─vg_var-lv_var_rmeta_0  252:1    0    4M  0 lvm  
+│ └─vg_var-lv_var        252:5    0  952M  0 lvm  /var
+└─vg_var-lv_var_rimage_0 252:2    0  952M  0 lvm  
+  └─vg_var-lv_var        252:5    0  952M  0 lvm  /var
+sde                       8:64   0  10G  0 disk 
+sdf                       8:80   0  10G  0 disk 
+sdg                       8:96   0  10G  0 disk 
+vda                     253:0    0   1M  1 disk 
+
+```
