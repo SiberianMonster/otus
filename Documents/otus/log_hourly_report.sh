@@ -44,6 +44,7 @@ ensure_deps() {
   command -v flock >/dev/null || die "flock not found (util-linux)"
 }
 
+# Предотвращает одновременный запуск нескольких копий
 acquire_lock() {
   mkdir -p "$STATE_DIR"
   exec 9>"$LOCK_FILE"
@@ -65,6 +66,7 @@ init_state() {
   [[ -f "$LAST_POS_FILE" ]] || echo "0" >"$LAST_POS_FILE"
   [[ -f "$LAST_TIME_FILE" ]] || date -Is >"$LAST_TIME_FILE"
 }
+
 
 extract_time_brackets() {
   sed -n 's/^[^[]*\[\([^]]*\)\].*$/\1/p'
@@ -128,6 +130,7 @@ analyze_lines() {
   fi
 
   local first_ts last_ts
+  # Временной диапазон
   first_ts="$(head -n 1 "$input_file" | extract_time_brackets)"
   last_ts="$(tail -n 1 "$input_file" | extract_time_brackets)"
 
@@ -149,30 +152,29 @@ analyze_lines() {
     {
       line = $0
 
-      # IP
+      # Список IP адресов
       if (match(line, /^([0-9]{1,3}\.){3}[0-9]{1,3}/)) {
         ip = substr(line, RSTART, RLENGTH)
         ip_count[ip]++
       }
 
-      # URL from: "METHOD URL HTTP/x.y"
+      # Список запрашиваемых URL
       if (match(line, /"[A-Z]+[[:space:]]+([^[:space:]]+)[[:space:]]+HTTP\/[0-9.]+"/, m)) {
         url = m[1]
         url_count[url]++
       }
 
-      # Status code after request (IMPORTANT: no \" escapes)
+      # Список всех кодов HTTP ответа
       if (match(line, /HTTP\/[0-9.]+"[[:space:]]+([0-9]{3})[[:space:]]+/, s)) {
         code = s[1]
         code_count[code]++
 
-        # Errors: 5xx always; 4xx except 404
+        # Ошибки веб-сервера/приложения c момента последнего запуска
         if (code ~ /^5[0-9][0-9]$/ || (code ~ /^4[0-9][0-9]$/ && code != "404")) {
           err_lines[++err_n] = line
         }
       }
 
-      # Keyword errors (rare in access logs, but included)
       if (tolower(line) ~ /(error|exception|traceback|fatal)/) {
         kw_err_lines[++kw_err_n] = line
       }
@@ -189,7 +191,6 @@ analyze_lines() {
       for (c in code_count) print code_count[c], c > CODE_OUT
       close(CODE_OUT)
 
-      # Print error blocks for shell inclusion
       print "== Web server / application errors (5xx + 4xx except 404) =="
       if (err_n == 0) print "None detected by status-code rule."
       else {
