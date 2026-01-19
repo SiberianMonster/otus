@@ -1,0 +1,99 @@
+# site.yml
+# Run: ansible-playbook -i inventory.ini site.yml
+#
+# Assumes:
+# - web VM IP: 192.168.56.10
+# - log VM IP: 192.168.56.15
+# - SSH user is ubuntu (change in inventory if different)
+
+- name: Configure log server (rsyslog)
+  hosts: log
+  become: true
+  vars:
+    rsyslog_remote_dir: /var/log/rsyslog
+  tasks:
+    - name: Ensure rsyslog installed
+      ansible.builtin.apt:
+        name: rsyslog
+        state: present
+        update_cache: true
+
+    - name: Ensure remote log base directory exists
+      ansible.builtin.file:
+        path: "{{ rsyslog_remote_dir }}"
+        state: directory
+        owner: syslog
+        group: adm
+        mode: "0755"
+
+    - name: Enable UDP/TCP reception + remote file template in /etc/rsyslog.conf (idempotent)
+      ansible.builtin.blockinfile:
+        path: /etc/rsyslog.conf
+        marker: "# {mark} ANSIBLE MANAGED REMOTE SYSLOG"
+        insertafter: EOF
+        block: |
+          # provides UDP syslog reception
+          module(load="imudp")
+          input(type="imudp" port="514")
+
+          # provides TCP syslog reception
+          module(load="imtcp")
+          input(type="imtcp" port="514")
+
+          # Write remote logs by host/program to files
+          template(name="RemoteLogs" type="string"
+                   string="/var/log/rsyslog/%HOSTNAME%/%PROGRAMNAME%.log")
+
+          # Only remote traffic (not localhost)
+          if ($fromhost-ip != "127.0.0.1") then {
+            action(type="omfile" dynaFile="RemoteLogs" dirCreateMode="0755" FileCreateMode="0640")
+            stop
+          }
+
+    - name: Validate rsyslog config
+      ansible.builtin.command: rsyslogd -N1
+      changed_when: false
+
+    - name: Restart rsyslog
+      ansible.builtin.service:
+        name: rsyslog
+        state: restarted
+        enabled: true
+
+
+- name: Configure web server (nginx + syslog shipping)
+  hosts: web
+  become: true
+  vars:
+    log_server_ip: "192.168.56.15"
+  tasks:
+    - name: Ensure nginx installed
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+        update_cache: true
+
+    - name: Ensure nginx is enabled
+      ansible.builtin.service:
+        name: nginx
+        enabled: true
+
+    - name: Configure nginx syslog access/error logs (in http {} block)
+      ansible.builtin.blockinfile:
+        path: /etc/nginx/nginx.conf
+        marker: "# {mark} ANSIBLE MANAGED SYSLOG LOGGING"
+        insertafter: '^\s*http\s*\{'
+        block: |
+          access_log /var/log/nginx/access.log;
+          error_log /var/log/nginx/error.log;
+          error_log syslog:server={{ log_server_ip }}:514,tag=nginx_error;
+          access_log syslog:server={{ log_server_ip }}:514,tag=nginx_access,severity=info combined;
+
+    - name: Test nginx config
+      ansible.builtin.command: nginx -t
+      changed_when: false
+
+    - name: Restart nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
